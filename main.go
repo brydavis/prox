@@ -13,21 +13,57 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
-	_ "github.com/go-sql-driver/mysql"
+	// _ "github.com/denisenkom/go-mssqldb"
+	// _ "github.com/go-sql-driver/mysql"
+	_ "./go-mssqldb"
+	_ "./odbc"
 )
 
 var (
 	debug   = flag.Bool("debug", false, "enable debugging")
-	config  = flag.String("confit", "config.json", "connection configuration file")
+	config  = flag.String("config", "config.json", "connection configuration file")
 	manager = map[string]*sql.DB{}
 	current string
 	vars    = map[string][][]map[string]interface{}{}
+	now     = time.Now()
+	mode    = ""
+
+	intro = `
+ETL Proxy Server (Prox)
+=====================================
+Today's date: %v %d, %d
+Current database: "%s"
+
+`
+
+	help = `
+Prox Help Menu
+=====================================
+	.use
+	.quit, .exit, .q
+	.clear, .cls
+	.current
+	.run
+	.help, .h
+	.set
+	.unset
+	.get
+
+	// .mode // csv, xml, json...
+	// .export // "filename.csv" select * from t1
+	// .join // x a b
+	// .analysis
+	// .search, .find //
+	// .describe //
+
+
+`
 )
 
 func main() {
-	go proxy()
+	// go proxy()
 	connect()
 	listen()
 }
@@ -62,6 +98,13 @@ func scan(cn net.Conn) {
 }
 
 func listen() {
+
+	for k, _ := range manager {
+		interpret(nil, fmt.Sprintf(".use %s", k))
+		fmt.Printf(intro, now.Month(), now.Day(), now.Year(), k)
+		break
+	}
+
 	for {
 		scanner := bufio.NewScanner(os.Stdin)
 		fmt.Print("~> ")
@@ -78,13 +121,36 @@ func interpret(cn net.Conn, text string) (output string) {
 
 	switch strings.ToLower(txtArr[0]) {
 	case ".quit", ".exit", ".q":
-		// os.Exit(1) // change to end connection
-		cn.Close()
+		if cn == nil {
+			os.Exit(1) // change to end connection
+		} else {
+			cn.Close()
+		}
+	case ".help":
+		output = fmt.Sprintln(help)
+	case ".ping":
+		db := manager[txtArr[1]]
+		if err := db.Ping(); err != nil {
+			fmt.Println(err, "\n")
+		} else {
+			fmt.Println()
+		}
 	case ".current":
 		output = fmt.Sprintf("current database: %v\n", current)
 	case ".use":
 		current = txtArr[1]
-	case ".clear":
+	case ".mode":
+		switch txtArr[1] {
+		case "json":
+			mode = "json"
+		case "csv":
+			mode = "csv"
+		case "xml":
+			mode = "xml"
+		default:
+			mode = ""
+		}
+	case ".clear", ".cls":
 		cmd, _ := exec.Command("clear").Output()
 		output = fmt.Sprintln(string(cmd))
 	case ".run":
@@ -93,55 +159,11 @@ func interpret(cn net.Conn, text string) (output string) {
 			j, _ := json.MarshalIndent(v, "", "\t")
 			output += fmt.Sprintf("%s\r\n", string(j))
 		}
-	// 	b, _ := ioutil.ReadFile("./sql/" + txtArr[1])
-	// 	script := string(b)
-	// 	Query(db, script)
-	// case "export":
-	// 	file, _ := ioutil.ReadFile("./sql/" + txtArr[1])
-	// 	rows, err := db.Query(string(file))
-	// 	if err != nil {
-	// 		// log.Fatal("Query Error: ", err.Error())
-	// 		fmt.Println(err.Error(), "\n")
-	// 		continue
-	// 	}
-	// 	defer rows.Close()
-
-	// 	columns, _ := rows.Columns()
-	// 	count := len(columns)
-	// 	values := make([]interface{}, count)
-	// 	valuePtrs := make([]interface{}, count)
-
-	// 	var megastore []map[string]interface{}
-
-	// 	for rows.Next() {
-	// 		for i, _ := range columns {
-	// 			valuePtrs[i] = &values[i]
-	// 		}
-
-	// 		rows.Scan(valuePtrs...)
-	// 		store := make(map[string]interface{})
-	// 		for i, col := range columns {
-	// 			var v interface{}
-	// 			val := values[i]
-	// 			b, ok := val.([]byte)
-
-	// 			if ok {
-	// 				v = string(b)
-	// 			} else {
-	// 				v = val
-	// 			}
-	// 			store[col] = v
-	// 		}
-	// 		megastore = append(megastore, store)
-	// 		// fmt.Println(store)
-	// 	}
-	// 	fmt.Println("\n")
-
-	// 	j, err := json.Marshal(megastore)
-	// 	ioutil.WriteFile(txtArr[2], j, 0777)
 
 	case ".set":
 		vars[txtArr[1]] = query(current, strings.Join(txtArr[2:], " "))
+	case ".unset":
+		delete(vars, txtArr[1])
 	case ".get":
 		for _, v := range vars[txtArr[1]] {
 			j, _ := json.MarshalIndent(v, "", "\t")
@@ -150,8 +172,15 @@ func interpret(cn net.Conn, text string) (output string) {
 
 	default:
 		for _, v := range query(current, text) {
-			j, _ := json.MarshalIndent(v, "", "\t")
-			output += fmt.Sprintf("%s\r\n", string(j))
+			switch mode {
+			case "json":
+				j, _ := json.MarshalIndent(v, "", "\t")
+				output += fmt.Sprintf("%s\r\n", string(j))
+			default:
+				for _, vv := range v {
+					output += fmt.Sprintf("%v\r\n", vv)
+				}
+			}
 		}
 	}
 
@@ -166,6 +195,9 @@ func connect() {
 	if err := json.Unmarshal(b, &cf); err != nil {
 		panic(err)
 	}
+
+	cmd, _ := exec.Command("clear").Output()
+	fmt.Println(string(cmd))
 
 	for name, conn := range cf {
 		var connStr string
@@ -188,6 +220,10 @@ func connect() {
 				conn["database"],
 			)
 
+		default:
+			for k, v := range conn {
+				connStr += fmt.Sprintf("%v=%v;", k, v)
+			}
 		}
 
 		db, err := sql.Open(name, connStr)
@@ -201,6 +237,7 @@ func connect() {
 				fmt.Print("success\n")
 			}
 		}
+		fmt.Println()
 		// defer db.Close()
 		manager[name] = db
 	}
@@ -212,12 +249,12 @@ func query(conn, script string) [][]map[string]interface{} {
 
 	var metastore [][]map[string]interface{}
 
-	for _, query := range queryset {
-		query = CleanQuery(query)
-		fmt.Printf("\n===========================\n%s\n---------------------------\n", query)
+	for _, qry := range queryset {
+		qry = clean(qry)
+		fmt.Printf("\n===========================\n%s\n---------------------------\n", qry)
 
-		if query != " " && query != "" {
-			rows, err := db.Query(query)
+		if qry != " " && qry != "" {
+			rows, err := db.Query(qry)
 			if err != nil {
 				// log.Fatal("Query Error: ", err.Error())
 				fmt.Println(err.Error(), "\n")
@@ -260,9 +297,9 @@ func query(conn, script string) [][]map[string]interface{} {
 	return metastore
 }
 
-func CleanQuery(q string) string {
+func clean(qry string) string {
 	r1 := regexp.MustCompile(`\s+`)
 	r2 := regexp.MustCompile(`--[^\n]*\n`)
-	q = r2.ReplaceAllString(q, "")
-	return r1.ReplaceAllString(q, " ")
+	qry = r2.ReplaceAllString(qry, "")
+	return r1.ReplaceAllString(qry, " ")
 }

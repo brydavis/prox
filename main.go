@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
-	_ "github.com/go-sql-driver/mysql"
-	// _ "./go-mssqldb"
-	// _ "./odbc"
+	// _ "github.com/denisenkom/go-mssqldb"
+	// _ "github.com/go-sql-driver/mysql"
+	_ "./go-mssqldb"
+	_ "./odbc"
 )
 
 var (
@@ -158,14 +158,18 @@ func interpret(cn net.Conn, text string) (output string) {
 			mode = ""
 		}
 	case ".clear", ".cls":
-		cmd, _ := exec.Command("clear").Output()
-		output = fmt.Sprintln(string(cmd))
+		output = clear()
 	case ".run":
 		b, _ := ioutil.ReadFile(txtArr[1])
-		for _, v := range query(current, string(b)) {
-			j, _ := json.MarshalIndent(v, "", "\t")
-			output += fmt.Sprintf("%s\r\n", string(j))
+		output = display(string(b))
+	case ".disconnect":
+		var db *sql.DB
+		if len(txtArr) == 1 {
+			db = manager[current]
+		} else {
+			db = manager[txtArr[1]]
 		}
+		db.Close()
 
 	case ".set":
 		vars[txtArr[1]] = query(current, strings.Join(txtArr[2:], " "))
@@ -177,21 +181,73 @@ func interpret(cn net.Conn, text string) (output string) {
 			output += fmt.Sprintf("%s\r\n", string(j))
 		}
 
-	default:
-		for _, v := range query(current, text) {
-			switch mode {
-			case "json":
-				j, _ := json.MarshalIndent(v, "", "\t")
-				output += fmt.Sprintf("%s\r\n", string(j))
+	case ".export": // "filename.csv" select * from t1
 
-			default:
-				output += fmt.Sprintf("%s\r\n", sortKeys(v))
-			}
-		}
+	case ".join": // x a b
+		t := join(vars[txtArr[1]][0], vars[txtArr[2]][0], txtArr[3:]...)
+		j, _ := json.MarshalIndent(t, "", "\t")
+		fmt.Println(string(j))
+
+	// .analysis
+	// .search, .find //
+	// .describe //
+
+	default:
+		output = display(text)
 	}
 
 	return output
 
+}
+
+func join(t1, t2 []map[string]interface{}, on ...string) []map[string]interface{} {
+	m := []map[string]interface{}{}
+	for a := 0; a < len(t1); a++ {
+		for b := 0; b < len(t2); b++ {
+			var matches int
+			for i := range on {
+				on1 := strings.TrimSpace(strings.ToLower(fmt.Sprintf("%v", t1[a][on[i]])))
+				on2 := strings.TrimSpace(strings.ToLower(fmt.Sprintf("%v", t2[b][on[i]])))
+				// fmt.Printf("%s\t\"%s\"\t\"%s\"\n", on[i], on1, on2)
+
+				if on1 == on2 {
+					matches += 1
+				}
+			}
+
+			if len(on) == matches {
+				r := map[string]interface{}{}
+				for k, v := range t1[a] {
+					r[k] = v
+				}
+				for k, v := range t2[b] {
+					r[k] = v
+				}
+				m = append(m, r)
+			}
+		}
+	}
+	return m
+}
+
+func display(text string) (output string) {
+	for _, v := range query(current, text) {
+		switch mode {
+		case "json":
+			j, _ := json.MarshalIndent(v, "", "\t")
+			output += fmt.Sprintf("%s\r\n", string(j))
+
+		default:
+			keys := sortKeys(v)
+			for i, row := range v {
+				for _, k := range keys {
+					output += fmt.Sprintf("\t%s: %v\r\n", k, row[k])
+				}
+				output += fmt.Sprintf("%0.3d ----\r\n", i)
+			}
+		}
+	}
+	return
 }
 
 func connect() {
@@ -201,9 +257,6 @@ func connect() {
 	if err := json.Unmarshal(b, &cf); err != nil {
 		panic(err)
 	}
-
-	cmd, _ := exec.Command("clear").Output()
-	fmt.Println(string(cmd))
 
 	for name, conn := range cf {
 		var connStr string
@@ -250,10 +303,11 @@ func connect() {
 }
 
 func query(conn, script string) [][]map[string]interface{} {
-	db := manager[conn]
-	queryset := strings.Split(script, ";")
-
-	var metastore [][]map[string]interface{}
+	var (
+		db         = manager[conn]
+		queryset   = strings.Split(script, ";")
+		worksheets [][]map[string]interface{}
+	)
 
 	for _, qry := range queryset {
 		qry = clean(qry)
@@ -268,12 +322,13 @@ func query(conn, script string) [][]map[string]interface{} {
 			}
 			defer rows.Close()
 
-			var megastore []map[string]interface{}
-
-			columns, _ := rows.Columns()
-			count := len(columns)
-			values := make([]interface{}, count)
-			valuePtrs := make([]interface{}, count)
+			var (
+				sheet      []map[string]interface{}
+				columns, _ = rows.Columns()
+				count      = len(columns)
+				values     = make([]interface{}, count)
+				valuePtrs  = make([]interface{}, count)
+			)
 
 			for rows.Next() {
 				for i, _ := range columns {
@@ -281,7 +336,7 @@ func query(conn, script string) [][]map[string]interface{} {
 				}
 
 				rows.Scan(valuePtrs...)
-				store := make(map[string]interface{})
+				row := make(map[string]interface{})
 				for i, col := range columns {
 					var v interface{}
 					val := values[i]
@@ -292,16 +347,14 @@ func query(conn, script string) [][]map[string]interface{} {
 					} else {
 						v = val
 					}
-					store[col] = v
+					row[col] = v
 				}
-				megastore = append(megastore, store)
+				sheet = append(sheet, row)
 			}
-			metastore = append(metastore, megastore)
+			worksheets = append(worksheets, sheet)
 		}
 	}
-
-	return metastore
-
+	return worksheets
 }
 
 func clean(qry string) string {
@@ -311,17 +364,40 @@ func clean(qry string) string {
 	return r1.ReplaceAllString(qry, " ")
 }
 
-func sortKeys(data []map[string]interface{}) (output string) {
+// func sortKeys(data []map[string]interface{}) (output string) {
+// 	for _, m := range data {
+// 		var keys []string
+// 		for k := range m {
+// 			keys = append(keys, k)
+// 		}
+// 		sort.Strings(keys)
+// 		for _, k := range keys {
+// 			output += fmt.Sprintf("%s: %v, ", k, m[k])
+// 		}
+// 		output += "\n"
+// 	}
+// 	return
+// }
+
+func sortKeys(data []map[string]interface{}) []string {
+	uniqueKeys := map[string]bool{}
 	for _, m := range data {
-		var keys []string
 		for k := range m {
-			keys = append(keys, k)
+			// keys = append(keys, k)
+			uniqueKeys[k] = true
 		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			output += fmt.Sprintf("%s: %v, ", k, m[k])
-		}
-		output += "\n"
 	}
-	return
+
+	var keys []string
+	for k := range uniqueKeys {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+	return keys
+}
+
+func clear() string {
+	cmd, _ := exec.Command("clear").Output()
+	return fmt.Sprintln(string(cmd))
 }

@@ -12,13 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
-	// _ "github.com/denisenkom/go-mssqldb"
-	// _ "github.com/go-sql-driver/mysql"
-	_ "./go-mssqldb"
-	_ "./odbc"
+	_ "github.com/denisenkom/go-mssqldb"
+	_ "github.com/go-sql-driver/mysql"
+	// _ "./go-mssqldb"
+	// _ "./odbc"
 )
 
 var (
@@ -31,7 +32,7 @@ var (
 	mode    = ""
 
 	intro = `
-ETL Proxy Server (Prox)
+STAX Analytics and ETL Server
 =====================================
 Today's date: %v %d, %d
 Current database: "%s"
@@ -39,7 +40,7 @@ Current database: "%s"
 `
 
 	help = `
-Prox Help Menu
+STAX Help Menu
 =====================================
 	.use
 	.quit, .exit, .q
@@ -50,8 +51,8 @@ Prox Help Menu
 	.set
 	.unset
 	.get
+	.mode // csv, xml, json...
 
-	// .mode // csv, xml, json...
 	// .export // "filename.csv" select * from t1
 	// .join // x a b
 	// .analysis
@@ -126,14 +127,20 @@ func interpret(cn net.Conn, text string) (output string) {
 		} else {
 			cn.Close()
 		}
-	case ".help":
+	case ".help", ".h":
 		output = fmt.Sprintln(help)
 	case ".ping":
-		db := manager[txtArr[1]]
+		var db *sql.DB
+		if len(txtArr) == 1 {
+			db = manager[current]
+		} else {
+			db = manager[txtArr[1]]
+		}
+
 		if err := db.Ping(); err != nil {
 			fmt.Println(err, "\n")
 		} else {
-			fmt.Println()
+			fmt.Println("pong")
 		}
 	case ".current":
 		output = fmt.Sprintf("current database: %v\n", current)
@@ -176,10 +183,9 @@ func interpret(cn net.Conn, text string) (output string) {
 			case "json":
 				j, _ := json.MarshalIndent(v, "", "\t")
 				output += fmt.Sprintf("%s\r\n", string(j))
+
 			default:
-				for _, vv := range v {
-					output += fmt.Sprintf("%v\r\n", vv)
-				}
+				output += fmt.Sprintf("%s\r\n", sortKeys(v))
 			}
 		}
 	}
@@ -295,6 +301,7 @@ func query(conn, script string) [][]map[string]interface{} {
 	}
 
 	return metastore
+
 }
 
 func clean(qry string) string {
@@ -302,4 +309,19 @@ func clean(qry string) string {
 	r2 := regexp.MustCompile(`--[^\n]*\n`)
 	qry = r2.ReplaceAllString(qry, "")
 	return r1.ReplaceAllString(qry, " ")
+}
+
+func sortKeys(data []map[string]interface{}) (output string) {
+	for _, m := range data {
+		var keys []string
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			output += fmt.Sprintf("%s: %v, ", k, m[k])
+		}
+		output += "\n"
+	}
+	return
 }

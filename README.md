@@ -1,6 +1,7 @@
 # Prox
 
 ### Configuration
+Here's an example of a configuration file (e.g. `config.json`) that the program uses during startup to connect to all the various data sources. 
 ```js
 {
 	"cloud": {

@@ -116,7 +116,8 @@ func listen() {
 	}
 }
 
-func interpret(cn net.Conn, text string) (output string) {
+func interpret(cn net.Conn, text string) string {
+	output := "\n"
 	txtArr := strings.Split(text, " ")
 
 	switch strings.ToLower(txtArr[0]) {
@@ -157,8 +158,7 @@ func interpret(cn net.Conn, text string) (output string) {
 			mode = ""
 		}
 	case ".clear", ".cls":
-		cmd, _ := exec.Command("clear").Output()
-		output = fmt.Sprintln(string(cmd))
+		output = clearScreen()
 	case ".run":
 		b, _ := ioutil.ReadFile(txtArr[1])
 		for _, v := range query(current, string(b)) {
@@ -186,7 +186,7 @@ func interpret(cn net.Conn, text string) (output string) {
 			_, err := db.Exec(create)
 			if err != nil {
 				log.Printf("%q: %s\n", err, create)
-				return
+				return output
 			}
 
 			var id int
@@ -207,7 +207,7 @@ func interpret(cn net.Conn, text string) (output string) {
 				_, err = db.Exec(insert)
 				if err != nil {
 					log.Printf("%q: %s\n", err, insert)
-					return
+					return output
 				}
 			}
 		}
@@ -234,9 +234,7 @@ func interpret(cn net.Conn, text string) (output string) {
 			}
 		}
 	}
-
 	return output
-
 }
 
 func m2s(m []map[string]interface{}) [][]string {
@@ -266,65 +264,33 @@ func m2s(m []map[string]interface{}) [][]string {
 }
 
 func connect() {
+	fmt.Println(clearScreen())
 	flag.Parse()
+
 	b, _ := ioutil.ReadFile(*config)
 	var cf map[string]map[string]interface{}
 	if err := json.Unmarshal(b, &cf); err != nil {
 		panic(err)
 	}
 
-	cmd, _ := exec.Command("clear").Output()
-	fmt.Println(string(cmd))
-
 	for name, conn := range cf {
-		var connStr string
-		switch name {
-		case "mssql":
-			for k, v := range conn {
-				connStr += fmt.Sprintf("%s=%v;", k, v)
-			}
-
-			if *debug {
-				fmt.Println(connStr)
-			}
-		case "mysql":
-			connStr = fmt.Sprintf("%s:%s@%s(%s:%v)/%s",
-				conn["user"],
-				conn["password"],
-				conn["protocol"],
-				conn["host"],
-				conn["port"],
-				conn["database"],
-			)
-
-		default:
-			for k, v := range conn {
-				connStr += fmt.Sprintf("%v=%v;", k, v)
-			}
+		connStr := interpolate(conn["connstr"].(string), conn)
+		if *debug {
+			fmt.Println(connStr)
 		}
 
-		db, err := sql.Open(name, connStr)
+		db, err := sql.Open(conn["pkg"].(string), connStr)
 		if err != nil {
-			log.Fatal("Open connection failed:", err.Error())
+			fmt.Printf("database ('%s')...\tFAIL (%s)\n", name, err.Error())
 		} else {
-			fmt.Println("connected to database...\nPinging database: ")
-			if err = db.Ping(); err != nil {
-				fmt.Printf("Error: %s\n%v\n", err)
-			} else {
-				fmt.Print("success\n")
-			}
+			fmt.Printf("database ('%s')...\tPASS\n", name)
 		}
-		fmt.Println()
-		// defer db.Close()
 		manager[name] = db
 	}
+	fmt.Println()
 
-	{
-		db, err := sql.Open("sqlite3", "./temp.db")
-		if err != nil {
-			log.Fatal(err)
-		}
-		// defer db.Close()
+	if _, good := manager["main"]; !good {
+		db, _ := sql.Open("sqlite3", "./temp.db")
 		manager["main"] = db
 	}
 }
@@ -337,8 +303,6 @@ func query(conn, script string) [][]map[string]interface{} {
 
 	for _, qry := range queryset {
 		qry = clean(qry)
-		fmt.Printf("-----------------------------------------\n%s\n-----------------------------------------\n", qry)
-
 		if qry != " " && qry != "" {
 			rows, err := db.Query(qry)
 			if err != nil {
@@ -381,7 +345,6 @@ func query(conn, script string) [][]map[string]interface{} {
 	}
 
 	return metastore
-
 }
 
 func clean(qry string) string {
@@ -404,4 +367,19 @@ func sortKeys(data []map[string]interface{}) (output string) {
 		output += "\n"
 	}
 	return
+}
+
+func clearScreen() string {
+	cmd, _ := exec.Command("clear").Output()
+	return string(cmd)
+}
+
+func interpolate(s string, m map[string]interface{}) string {
+	for k := range m {
+		old := fmt.Sprintf("$%s", k)
+		nue := fmt.Sprintf("%v", m[k])
+		s = strings.Replace(s, old, nue, -1)
+
+	}
+	return s
 }

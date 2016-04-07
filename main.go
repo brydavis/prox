@@ -161,9 +161,9 @@ func interpret(cn net.Conn, text string) string {
 		output = clearScreen()
 	case ".run":
 		b, _ := ioutil.ReadFile(txtArr[1])
-		for _, v := range query(current, string(b)) {
-			j, _ := json.MarshalIndent(v, "", "\t")
-			output += fmt.Sprintf("%s\r\n", string(j))
+		for _, res := range query(current, string(b)) {
+			j, _ := json.MarshalIndent(res, "", "\t")
+			output += fmt.Sprintf("%s\r\n\r\n(%d rows returned)\r\n", string(j), len(res))
 		}
 
 	case ".temp":
@@ -217,20 +217,25 @@ func interpret(cn net.Conn, text string) string {
 	case ".unset":
 		delete(vars, txtArr[1])
 	case ".get":
-		for _, v := range vars[txtArr[1]] {
-			j, _ := json.MarshalIndent(v, "", "\t")
-			output += fmt.Sprintf("%s\r\n", string(j))
+		for _, res := range vars[txtArr[1]] {
+			j, _ := json.MarshalIndent(res, "", "\t")
+			// output += fmt.Sprintf("%s\r\n", string(j))
+			output += fmt.Sprintf("%s\r\n\r\n(%d rows returned)\r\n", string(j), len(res))
+
 		}
 
 	default:
-		for _, v := range query(current, text) {
+		for _, res := range query(current, text) {
 			switch mode {
 			case "json":
-				j, _ := json.MarshalIndent(v, "", "\t")
-				output += fmt.Sprintf("%s\r\n", string(j))
+				j, _ := json.MarshalIndent(res, "", "\t")
+				// output += fmt.Sprintf("%s\r\n", string(j))
+				output += fmt.Sprintf("%s\r\n\r\n(%d rows returned)\r\n", string(j), len(res))
 
 			default:
-				output += fmt.Sprintf("%s\r\n", sortKeys(v))
+				// output += fmt.Sprintf("%s\r\n", sortKeys(res))
+				output += fmt.Sprintf("%s\r\n\r\n(%d rows returned)\r\n", sortKeys(res), len(res))
+
 			}
 		}
 	}

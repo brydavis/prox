@@ -17,12 +17,13 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/mattn/go-sqlite3"
+	// _ "github.com/denisenkom/go-mssqldb"
+	// _ "github.com/go-sql-driver/mysql"
+	// _ "github.com/mattn/go-sqlite3"
 
-	// _ "./go-mssqldb"
-	// _ "./odbc"
+	_ "./go-mssqldb"
+	_ "./mysql"
+	_ "./odbc"
 )
 
 var (
@@ -35,7 +36,7 @@ var (
 	mode    = ""
 
 	intro = `
-STAX Analytics and ETL Server
+Analytics and ETL Server
 =====================================
 Today's date: %v %d, %d
 Current database: "%s"
@@ -129,19 +130,7 @@ func interpret(cn net.Conn, text string) string {
 		}
 	case ".help", ".h":
 		output = fmt.Sprintln(help)
-	case ".ping":
-		var db *sql.DB
-		if len(txtArr) == 1 {
-			db = manager[current]
-		} else {
-			db = manager[txtArr[1]]
-		}
 
-		if err := db.Ping(); err != nil {
-			fmt.Println(err, "\n")
-		} else {
-			fmt.Println("pong")
-		}
 	case ".current":
 		output = fmt.Sprintf("current database: %v\n", current)
 	case ".use":
@@ -164,6 +153,12 @@ func interpret(cn net.Conn, text string) string {
 		for _, res := range query(current, string(b)) {
 			j, _ := json.MarshalIndent(res, "", "\t")
 			output += fmt.Sprintf("%s\r\n\r\n(%d rows returned)\r\n", string(j), len(res))
+		}
+
+	case ".create":
+		switch txtArr[1] {
+		case "table":
+
 		}
 
 	case ".temp":
@@ -224,6 +219,15 @@ func interpret(cn net.Conn, text string) string {
 
 		}
 
+	case ".ping", ".status":
+		for name := range manager {
+			db := manager[name]
+			ping(name, db)
+		}
+
+	case ".reconnect", ".reconn", ".connect", ".conn":
+		connect()
+
 	default:
 		for _, res := range query(current, text) {
 			switch mode {
@@ -240,6 +244,16 @@ func interpret(cn net.Conn, text string) string {
 		}
 	}
 	return output
+}
+
+func ping(name string, db *sql.DB) error {
+	if err := db.Ping(); err != nil {
+		fmt.Printf("database '%s'...\t\tFAIL (%s)\n", name, err.Error())
+		return err
+	} else {
+		fmt.Printf("database '%s'...\t\tPASS\n", name)
+		return nil
+	}
 }
 
 func m2s(m []map[string]interface{}) [][]string {
@@ -284,20 +298,12 @@ func connect() {
 			fmt.Println(connStr)
 		}
 
-		db, err := sql.Open(conn["pkg"].(string), connStr)
-		if err != nil {
-			fmt.Printf("database ('%s')...\tFAIL (%s)\n", name, err.Error())
-		} else {
-			fmt.Printf("database ('%s')...\tPASS\n", name)
+		db, _ := sql.Open(conn["pkg"].(string), connStr)
+		if ping(name, db) == nil {
+			manager[name] = db
 		}
-		manager[name] = db
 	}
 	fmt.Println()
-
-	if _, good := manager["main"]; !good {
-		db, _ := sql.Open("sqlite3", "./temp.db")
-		manager["main"] = db
-	}
 }
 
 func query(conn, script string) [][]map[string]interface{} {
@@ -307,7 +313,7 @@ func query(conn, script string) [][]map[string]interface{} {
 	var metastore [][]map[string]interface{}
 
 	for _, qry := range queryset {
-		qry = clean(qry)
+		qry = cleanQuery(qry)
 		if qry != " " && qry != "" {
 			rows, err := db.Query(qry)
 			if err != nil {
@@ -352,11 +358,15 @@ func query(conn, script string) [][]map[string]interface{} {
 	return metastore
 }
 
-func clean(qry string) string {
-	r1 := regexp.MustCompile(`\s+`)
-	r2 := regexp.MustCompile(`--[^\n]*\n`)
-	qry = r2.ReplaceAllString(qry, "")
-	return r1.ReplaceAllString(qry, " ")
+func cleanQuery(qry string) string {
+
+	comments := regexp.MustCompile(`--[^\n]*\n`)
+	spaces := regexp.MustCompile(`\s+`)
+
+	qry = comments.ReplaceAllString(qry, "")
+	qry = spaces.ReplaceAllString(qry, " ")
+
+	return strings.TrimSpace(qry)
 }
 
 func sortKeys(data []map[string]interface{}) (output string) {
@@ -366,10 +376,11 @@ func sortKeys(data []map[string]interface{}) (output string) {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		pairs := []string{}
 		for _, k := range keys {
-			output += fmt.Sprintf("%s: %v, ", k, m[k])
+			pairs = append(pairs, fmt.Sprintf("%s: %v", k, m[k]))
 		}
-		output += "\n"
+		output += strings.Join(pairs, ",\t") + "\n"
 	}
 	return
 }

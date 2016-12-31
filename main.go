@@ -103,8 +103,11 @@ func scan(cn net.Conn) {
 }
 
 func listen() {
-	interpret(nil, ".use main")
-	fmt.Printf(intro, now.Month(), now.Day(), now.Year(), "main")
+	for m := range manager {
+		interpret(nil, fmt.Sprintf(".use %s", m))
+		fmt.Printf(intro, now.Month(), now.Day(), now.Year(), m)
+		break
+	}
 
 	for {
 		scanner := bufio.NewScanner(os.Stdin)
@@ -160,6 +163,16 @@ func interpret(cn net.Conn, text string) string {
 		case "table":
 
 		}
+
+	case ".into":
+		if db, ok := manager["main"]; ok {
+
+		} else {
+			output = "(please identify a main database)\n"
+		}
+
+	case ".main":
+		manager["main"] = manager[txtArr[1]]
 
 	case ".temp":
 		db := manager["main"]

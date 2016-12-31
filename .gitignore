@@ -1,0 +1,10 @@
+.gitignore
+config.json
+./odbc
+./odbc/*
+./go-mssqldb
+./go-mssqldb/*
+./sql
+./sql/*
+./mysql
+./mysql/*
